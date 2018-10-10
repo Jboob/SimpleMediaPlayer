@@ -1,2 +1,2 @@
 # SimpleMediaPlayer
-Custom simple Android MediaPlayer
+#Custom simple Android MediaPlayer
