@@ -4,8 +4,11 @@ import android.content.Context;
 import android.media.MediaPlayer;
 import android.os.Handler;
 
+import com.ran.media.constant.MusicPlayType;
+import com.ran.media.constant.PlayMode;
 import com.ran.media.interfaces.OnPlayerEventListener;
 import com.ran.media.model.MusicInfo;
+import com.ran.media.view.JToast;
 
 import java.io.IOException;
 import java.util.List;
@@ -16,7 +19,9 @@ import java.util.Random;
  * @date 2018/10/10.
  */
 
-public class MediaPlayerManager {
+public class MediaPlayerManager implements MediaPlayer.OnPreparedListener, MediaPlayer.OnBufferingUpdateListener {
+
+    private String TAG = "MediaPlayerManager";
 
     private MediaPlayer mediaPlayer;
     private String musicPath;
@@ -28,6 +33,9 @@ public class MediaPlayerManager {
     private Handler playerHandler;
     private Context mContext;
 
+    //缓冲进度
+    private int bufferPercentage;
+
     // Current playback position
     public int currentPosition = 0;
 
@@ -37,10 +45,15 @@ public class MediaPlayerManager {
     //当前播放第几首
     private int playNum = 0;
 
+    private JToast toast;
+
     public MediaPlayerManager(Context context) {
         this.mContext = context;
         mediaPlayer = new MediaPlayer();
+        mediaPlayer.setOnPreparedListener(this);
+        mediaPlayer.setOnBufferingUpdateListener(this);
         playerHandler = new Handler();
+        toast = JToast.getInstance();
     }
 
     public void addOnPlayerEventListener(OnPlayerEventListener listener) {
@@ -64,25 +77,21 @@ public class MediaPlayerManager {
      * 播放
      */
     public void play() {
-        if (currentPosition > 0){
+        if (currentPosition > 0) {
             resumePlay();
-        }else {
+        } else {
             try {
                 musicPath = getMusicPath();
                 if (null != musicPath) {
                     mediaPlayer.reset();
                     mediaPlayer.setDataSource(musicPath);//设置要播放的音频
-                    mediaPlayer.prepare();//预加载音频
-                    mediaPlayer.start();//开始播放
-                    onPlayerEventListener.onPlaySwitch(mMusicInfos.get(playNum));
-                    onPlayerEventListener.onPlayStart();
-                    playerHandler.post(playerRunnable);
-
+                    mediaPlayer.prepareAsync();//异步加载音频
                 }
             } catch (IOException e) {
                 e.printStackTrace();
             }
         }
+
     }
 
     /**
@@ -92,16 +101,19 @@ public class MediaPlayerManager {
         if (isPlaying()) {
             mediaPlayer.pause();
             onPlayerEventListener.onPlayPause();
+            playerHandler.removeCallbacks(playerRunnable);
         }
     }
 
     /**
      * Continue playing
      */
-    public void resumePlay(){
-        if (!isPlaying()){
-//            mediaPlayer.seekTo(currentPosition);
+    public void resumePlay() {
+        if (!isPlaying()) {
             mediaPlayer.start();
+            onPlayerEventListener.onPlaySwitch(mMusicInfos.get(playNum));
+            onPlayerEventListener.onPlayStart();
+            playerHandler.post(playerRunnable);
         }
     }
 
@@ -109,26 +121,42 @@ public class MediaPlayerManager {
      * Previous song
      */
     public void previous() {
-        if (playMode == PlayMode.RANDOM) {
-            playNum = getMusicNum();
+        if (isCanPlay()) {
+            return;
         }
-        if (playNum > 0)
-            playNum = playNum - 1;
-        this.play();
+        if (playMode == PlayMode.RANDOM) {
+            playNum = getMusicNum(MusicPlayType.MUSIC_RANDOM);
+        }
+        playNum = getMusicNum(MusicPlayType.MUSIC_PREVIOUS);
+
+        switchMusic();
     }
 
     /**
      * 下一曲
      */
     public void next() {
+        if (isCanPlay()) {
+            return;
+        }
         if (playMode == PlayMode.RANDOM) {
-            playNum = getMusicNum();
+            playNum = getMusicNum(MusicPlayType.MUSIC_RANDOM);
+        }else if (playMode == PlayMode.LIST_LOOP){
+            if (playNum == getMusicCount()){
+                playNum = 0;
+            }
+        } else if (playMode == PlayMode.ORDER){
+            playNum = getMusicNum(MusicPlayType.MUSIC_NEXT);
+            if (playNum == getMusicCount() && !isPlaying()){
+                if (isPlayEnd()){
+                    onPlayerEventListener.onPlayProgress(0);
+                    onPlayerEventListener.onPlayPause();
+                }else {
+                    resumePlay();
+                }
+            }
         }
-        if (playNum < musicCount) {
-            playNum = playNum + 1;
-        }
-
-        this.play();
+        switchMusic();
     }
 
     /**
@@ -137,6 +165,7 @@ public class MediaPlayerManager {
      * @param position
      */
     public void seekTo(int position) {
+
         mediaPlayer.seekTo(position);
     }
 
@@ -146,6 +175,28 @@ public class MediaPlayerManager {
 
     public int getDuration() {
         return mediaPlayer.getDuration();
+    }
+
+    public int getBufferPercentage() {
+        return bufferPercentage;
+    }
+
+    /**
+     * 是否可以播放
+     *
+     * @return true 不可播放 false 可以播放
+     */
+    private boolean isCanPlay() {
+        if (musicCount <= 0) {
+            return true;
+        }
+        return false;
+    }
+
+    private void switchMusic() {
+        playerHandler.removeCallbacks(playerRunnable);
+        currentPosition = 0;
+        this.play();
     }
 
     /**
@@ -171,7 +222,12 @@ public class MediaPlayerManager {
             if (mMusicInfos.size() <= 0) {
                 return null;
             }
-            return mMusicInfos.get(playNum).getMusicPath();
+            int count = musicCount - 1;
+            if (0 <= playNum && playNum <= count){
+                return mMusicInfos.get(playNum).getMusicPath();
+            }else {
+                return null;
+            }
         }
     }
 
@@ -180,22 +236,69 @@ public class MediaPlayerManager {
      *
      * @return
      */
-    private int getMusicNum() {
-        int min = 0;
-        int max = musicCount;
-        if (null == random) {
-            random = new Random();
+    private int getMusicNum(int flag) {
+        int count = musicCount - 1;
+        if (flag == MusicPlayType.MUSIC_RANDOM) {
+            int min = 0;
+            int max = count;
+            if (null == random) {
+                random = new Random();
+            }
+            int num = random.nextInt(max) % (max - min + 1) + min;
+            return num;
+        } else if (flag == MusicPlayType.MUSIC_NEXT) {
+            if (playNum < count) {
+                playNum = playNum + 1;
+            }
+            return playNum;
+        } else if (flag == MusicPlayType.MUSIC_PREVIOUS) {
+            if (playNum > 0)
+                playNum = playNum - 1;
+            return playNum;
         }
-        int num = random.nextInt(max) % (max - min + 1) + min;
-        return num;
+        return 0;
+    }
+
+    private int getMusicCount(){
+        if (musicCount > 0){
+            return musicCount - 1;
+        }
+        return 0;
+    }
+
+    /**
+     * 是否播放结束
+     * @return
+     */
+    private boolean isPlayEnd(){
+        int temp = getDuration() - currentPosition;
+        if (temp <= 150){
+            return true;
+        }
+        return false;
+    }
+
+    @Override
+    public void onPrepared(MediaPlayer mediaPlayer) {
+        mediaPlayer.start();
+        onPlayerEventListener.onPlaySwitch(mMusicInfos.get(playNum));
+        onPlayerEventListener.onPlayStart();
+        playerHandler.post(playerRunnable);
+    }
+
+    @Override
+    public void onBufferingUpdate(MediaPlayer mediaPlayer, int percent) {
+        this.bufferPercentage = percent;
     }
 
     /**
      * 销毁
      */
     public void destory() {
-        mediaPlayer.stop();
-        mediaPlayer.release();
+        if (isPlaying()) {
+            mediaPlayer.stop();
+            mediaPlayer.release();
+        }
         mediaPlayer = null;
         playerHandler.removeCallbacks(playerRunnable);
     }
@@ -207,6 +310,8 @@ public class MediaPlayerManager {
                 currentPosition = mediaPlayer.getCurrentPosition();
                 onPlayerEventListener.onPlayProgress(currentPosition);
                 playerHandler.post(playerRunnable);
+            } else {
+                next();
             }
         }
     };
