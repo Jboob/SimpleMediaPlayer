@@ -1,2 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.ran.media" />
+    package="com.ran.media"
+    >
+
+    <application>
+
+        <service android:name=".service.MusicService"
+            android:enabled="true"
+            android:exported="true"
+            >
+
+        </service>
+
+    </application>
+
+</manifest>

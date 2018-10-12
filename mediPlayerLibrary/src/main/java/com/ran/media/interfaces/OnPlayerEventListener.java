@@ -17,4 +17,8 @@ public interface OnPlayerEventListener {
     void onPlayPause();
 
     void onPlayProgress(int progress);
+
+    void isLoadIng(int flag);
+
+    void onPlayMode(int mode);
 }
